@@ -2,50 +2,266 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Online Test Proctoring Demo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>オンラインテスト監視システム (コントロール分離版)</title>
     <style>
-        body { font-family: sans-serif; margin: 20px; background: #f4f7f6; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        video { width: 48%; border: 1px solid #ccc; background: #000; border-radius: 4px; }
-        .btn-container { margin: 20px 0; }
-        button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin-right: 10px; border: none; border-radius: 4px; }
-        #startBtn { background-color: #28a745; color: white; }
-        #stopBtn { background-color: #dc3545; color: white; }
-        button:disabled { background-color: #6c757d; opacity: 0.65; cursor: not-allowed; }
-        #status { font-weight: bold; color: #0056b3; margin-top: 10px; padding: 10px; background: #e2e3e5; border-radius: 4px; }
+        :root {
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --danger: #ef4444;
+            --danger-hover: #dc2626;
+            --success: #10b981;
+            --success-hover: #059669;
+            --warning: #f59e0b;
+            --background: #f3f4f6;
+            --card-bg: #ffffff;
+            --text-main: #1f2937;
+            --text-muted: #4b5563;
+        }
+
+        body {
+            font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', Meiryo, sans-serif;
+            background-color: var(--background);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 900px;
+            width: 100%;
+            background: var(--card-bg);
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        h1 {
+            font-size: 24px;
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: var(--primary);
+            text-align: center;
+        }
+
+        .description {
+            color: var(--text-muted);
+            font-size: 14px;
+            text-align: center;
+            margin-bottom: 24px;
+            line-height: 1.6;
+        }
+
+        .btn-container {
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            transition: all 0.2s ease-in-out;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        #startBtn { background-color: var(--primary); color: white; }
+        #startBtn:hover:not(:disabled) { background-color: var(--primary-hover); }
+
+        #stopBtn { background-color: var(--danger); color: white; }
+        #stopBtn:hover:not(:disabled) { background-color: var(--danger-hover); }
+
+        #downloadBtn { background-color: var(--success); color: white; }
+        #downloadBtn:hover:not(:disabled) { background-color: var(--success-hover); }
+
+        #recoveryZone {
+            display: none;
+            background-color: #fef3c7;
+            border: 2px dashed var(--warning);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        #recoveryBtn { background-color: var(--warning); color: white; }
+
+        button:disabled {
+            background-color: #d1d5db;
+            color: #9ca3af;
+            cursor: not-allowed;
+        }
+
+        #status {
+            font-weight: 600;
+            text-align: center;
+            margin-bottom: 24px;
+            padding: 12px;
+            background-color: #f3f4f6;
+            border-radius: 6px;
+            font-size: 15px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .preview-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .preview-box {
+            background: #111827;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+            aspect-ratio: 16 / 9;
+        }
+
+        .preview-box h3 {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            margin: 0;
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            padding: 4px 8px;
+            font-size: 12px;
+            border-radius: 4px;
+            z-index: 10;
+        }
+
+        video { width: 100%; height: 100%; object-fit: cover; }
+        .info-footer {
+            margin-top: 30px;
+            font-size: 12px;
+            color: var(--text-muted);
+            text-align: center;
+            border-top: 1px solid #e5e7eb;
+            padding-top: 20px;
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 <body>
 
 <div class="container">
-    <h1>Online Test Proctoring (Camera & Screen Recorder)</h1>
-    <p>インカメラとディスプレイを同時録画し、ハッシュ値付きの1つのZIPファイルとして出力します。</p>
+    <h1>オンラインテスト監視システム (プロセスコントロール版)</h1>
+    <p class="description">
+        インカメラとディスプレイを同時録画します。録画データは随時ブラウザ内DBへ自動保存されます。<br>
+        試験終了時は、まず「録画停止」を押し、その後に「ZIP保存」ボタンからファイルをダウンロードしてください。
+    </p>
+
+    <div id="recoveryZone">
+        <p style="margin: 0 0 10px 0; font-weight: bold; color: #b45309;">⚠️ 未保存の試験バックアップデータが見つかりました。</p>
+        <button id="recoveryBtn">🔄 バックアップからZIPを生成して保存</button>
+        <button id="clearBackupBtn" style="background: transparent; color: var(--text-muted); font-size: 13px; text-decoration: underline; cursor: pointer;">バックアップを破棄</button>
+    </div>
     
     <div class="btn-container">
-        <button id="startBtn">録画開始 (Start)</button>
-        <button id="stopBtn" disabled>録画停止・ZIP保存 (Stop & Save)</button>
+        <button id="startBtn">🔴 録画開始 (Start)</button>
+        <button id="stopBtn" disabled>⏹️ 録画停止 (Stop)</button>
+        <button id="downloadBtn" disabled>💾 ZIPファイルを生成して保存 (Save ZIP)</button>
     </div>
 
-    <div id="status">準備完了 (Ready)</div>
+    <div id="status">システム初期化中...</div>
 
-    <h3>Previews</h3>
-    <div style="display: flex; justify-content: space-between;">
-        <video id="cameraPreview" autoplay muted playsinline></video>
-        <video id="screenPreview" autoplay muted playsinline></video>
+    <div class="preview-grid">
+        <div class="preview-box">
+            <h3>📷 インカメラ (Camera)</h3>
+            <video id="cameraPreview" autoplay muted playsinline></video>
+        </div>
+        <div class="preview-box">
+            <h3>🖥️ ディスプレイ (Screen)</h3>
+            <video id="screenPreview" autoplay muted playsinline></video>
+        </div>
+    </div>
+
+    <div class="info-footer">
+        ※ 録画データはブラウザ内の IndexedDB を用いて安全に管理されます。外部サーバーへの自動送信はありません。
     </div>
 </div>
 
 <script>
     let cameraStream, screenStream;
     let cameraRecorder, screenRecorder;
-    let cameraChunks = [], screenChunks = [];
+    
+    // DB関連変数
+    let db;
+    const DB_NAME = "ProctoringBackupDB";
+    const DB_VERSION = 1;
 
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
     const statusDiv = document.getElementById('status');
+    const recoveryZone = document.getElementById('recoveryZone');
+    const recoveryBtn = document.getElementById('recoveryBtn');
+    const clearBackupBtn = document.getElementById('clearBackupBtn');
 
-    // SHA-256 ハッシュ値計算関数
+    // --- 1. IndexedDBの初期化 ---
+    const dbRequest = indexedDB.open(DB_NAME, DB_VERSION);
+    dbRequest.onupgradeneeded = (e) => {
+        let database = e.target.result;
+        if (!database.objectStoreNames.contains("camera_chunks")) {
+            database.createObjectStore("camera_chunks", { autoIncrement: true });
+        }
+        if (!database.objectStoreNames.contains("screen_chunks")) {
+            database.createObjectStore("screen_chunks", { autoIncrement: true });
+        }
+    };
+    dbRequest.onsuccess = (e) => {
+        db = e.target.result;
+        statusDiv.innerText = "準備完了 (Ready)";
+        checkExistingBackup(); 
+    };
+    dbRequest.onerror = () => {
+        statusDiv.innerText = "エラー: データベースの初期化に失敗しました。";
+    };
+
+    function checkExistingBackup() {
+        const tx = db.transaction(["camera_chunks"], "readonly");
+        const store = tx.objectStore("camera_chunks");
+        const countRequest = store.count();
+        countRequest.onsuccess = () => {
+            if (countRequest.result > 0) {
+                recoveryZone.style.display = "block";
+                downloadBtn.disabled = false;
+            }
+        };
+    }
+
+    function saveChunk(storeName, blobChunk) {
+        if (!db) return;
+        const tx = db.transaction([storeName], "readwrite");
+        const store = tx.objectStore(storeName);
+        store.add(blobChunk);
+    }
+
+    function clearDatabase() {
+        return new Promise((resolve) => {
+            const tx = db.transaction(["camera_chunks", "screen_chunks"], "readwrite");
+            tx.objectStore("camera_chunks").clear();
+            tx.objectStore("screen_chunks").clear();
+            tx.oncomplete = () => {
+                recoveryZone.style.display = "none";
+                resolve();
+            };
+        });
+    }
+
     async function calculateSHA256(blob) {
         const arrayBuffer = await blob.arrayBuffer();
         const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
@@ -53,47 +269,54 @@
         return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     }
 
+    // --- 2. 録画コントロール ---
     startBtn.addEventListener('click', async () => {
-        cameraChunks = [];
-        screenChunks = [];
-        statusDiv.innerText = "カメラと画面の許可を要求中...";
+        await clearDatabase(); 
+        downloadBtn.disabled = true;
+        statusDiv.innerText = "デバイスと画面の許可を要求中...";
 
         try {
-            cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            cameraStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: true });
             document.getElementById('cameraPreview').srcObject = cameraStream;
 
-            screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+            screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface: "monitor" } });
             document.getElementById('screenPreview').srcObject = screenStream;
 
-            cameraRecorder = new MediaRecorder(cameraStream, { mimeType: 'video/webm' });
-            screenRecorder = new MediaRecorder(screenStream, { mimeType: 'video/webm' });
+            screenStream.getVideoTracks()[0].onended = () => { if (!stopBtn.disabled) stopRecording(); };
 
-            cameraRecorder.ondataavailable = e => { if (e.data.size > 0) cameraChunks.push(e.data); };
-            screenRecorder.ondataavailable = e => { if (e.data.size > 0) screenChunks.push(e.data); };
+            cameraRecorder = new MediaRecorder(cameraStream, { mimeType: 'video/webm;codecs=vp8,opus' });
+            screenRecorder = new MediaRecorder(screenStream, { mimeType: 'video/webm;codecs=vp8' });
+
+            cameraRecorder.ondataavailable = e => { if (e.data.size > 0) saveChunk("camera_chunks", e.data); };
+            screenRecorder.ondataavailable = e => { if (e.data.size > 0) saveChunk("screen_chunks", e.data); };
 
             cameraRecorder.onstop = screenRecorder.onstop = handleStop;
 
-            cameraRecorder.start();
-            screenRecorder.start();
+            cameraRecorder.start(1000); 
+            screenRecorder.start(1000);
 
-            statusDiv.innerText = "🔴 録画中... (Recording...)";
-            statusDiv.style.color = "red";
+            statusDiv.innerText = "🔴 監視録画中 (自動バックアップ有効)";
+            statusDiv.style.color = "var(--danger)";
             startBtn.disabled = true;
             stopBtn.disabled = false;
 
         } catch (err) {
             console.error(err);
-            statusDiv.innerText = "エラー: アクセスが拒否されたか、未対応のブラウザです。";
+            statusDiv.innerText = "エラー: 権限が得られませんでした。";
         }
     });
 
-    stopBtn.addEventListener('click', () => {
-        statusDiv.innerText = "録画を停止しています...";
-        cameraRecorder.stop();
-        screenRecorder.stop();
-        cameraStream.getTracks().forEach(track => track.stop());
-        screenStream.getTracks().forEach(track => track.stop());
-    });
+    stopBtn.addEventListener('click', stopRecording);
+
+    function stopRecording() {
+        statusDiv.innerText = "録画を停止しています。データストアを確定中...";
+        statusDiv.style.color = "var(--text-main)";
+        
+        if (cameraRecorder && cameraRecorder.state !== 'inactive') cameraRecorder.stop();
+        if (screenRecorder && screenRecorder.state !== 'inactive') screenRecorder.stop();
+        if (cameraStream) cameraStream.getTracks().forEach(t => t.stop());
+        if (screenStream) screenStream.getTracks().forEach(t => t.stop());
+    }
 
     let stoppedCount = 0;
     async function handleStop() {
@@ -101,44 +324,102 @@
         if (stoppedCount < 2) return; 
         stoppedCount = 0; 
 
-        statusDiv.innerText = "ZIPファイルの生成とハッシュ値の計算中...";
-
-        const cameraBlob = new Blob(cameraChunks, { type: 'video/webm' });
-        const screenBlob = new Blob(screenChunks, { type: 'video/webm' });
-
-        // ハッシュ計算
-        const cameraHash = await calculateSHA256(cameraBlob);
-        const screenHash = await calculateSHA256(screenBlob);
-
-        // メタデータJSON作成
-        const metadata = {
-            generated_at: new Date().toISOString(),
-            files: {
-                "camera_video.webm": { sha256: cameraHash },
-                "screen_video.webm": { sha256: screenHash }
-            }
-        };
-
-        // JSZip を使って1つにまとめる
-        const zip = new JSZip();
-        zip.file("metadata.json", JSON.stringify(metadata, null, 2));
-        zip.file("camera_video.webm", cameraBlob);
-        zip.file("screen_video.webm", screenBlob);
-
-        // ZIPファイルを生成してダウンロード
-        const zipBlob = await zip.generateAsync({ type: "blob" });
-        const url = URL.createObjectURL(zipBlob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `exam_record_${Date.now()}.zip`;
-        a.click();
-        URL.revokeObjectURL(url);
-
-        statusDiv.innerText = "完了しました！ZIPファイルがダウンロードされました。";
-        statusDiv.style.color = "green";
+        statusDiv.innerText = "⏹️ 録画停止完了。右側の『ZIPファイルを生成して保存』ボタンを押してください。";
+        statusDiv.style.color = "var(--primary)";
         startBtn.disabled = false;
         stopBtn.disabled = true;
+        downloadBtn.disabled = false;
     }
+
+    // --- 3. ダウンロード処理 ---
+    downloadBtn.addEventListener('click', async () => {
+        downloadBtn.disabled = true;
+        startBtn.disabled = true;
+        await processAndDownload();
+    });
+
+    async function processAndDownload() {
+        statusDiv.innerText = "⏳ 処理中: 動画データを再構築し、ハッシュ（SHA-256）を計算しています。そのままお待ちください...";
+        statusDiv.style.color = "var(--warning)";
+
+        try {
+            const cameraBlob = await getAllChunksFromDB("camera_chunks", "video/webm");
+            const screenBlob = await getAllChunksFromDB("screen_chunks", "video/webm");
+
+            if (cameraBlob.size === 0 || screenBlob.size === 0) {
+                throw new Error("データが見つからないか、空です。");
+            }
+
+            const cameraHash = await calculateSHA256(cameraBlob);
+            const screenHash = await calculateSHA256(screenBlob);
+
+            const metadata = {
+                version: "1.0.0-separated",
+                generated_at: new Date().toISOString(),
+                files: {
+                    "camera_video.webm": { sha256: cameraHash, size_bytes: cameraBlob.size },
+                    "screen_video.webm": { sha256: screenHash, size_bytes: screenBlob.size }
+                }
+            };
+
+            const zip = new JSZip();
+            zip.file("metadata.json", JSON.stringify(metadata, null, 2));
+            zip.file("camera_video.webm", cameraBlob);
+            zip.file("screen_video.webm", screenBlob);
+
+            const zipBlob = await zip.generateAsync({ type: "blob" });
+            
+            const url = URL.createObjectURL(zipBlob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `exam_record_${Date.now()}.zip`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            statusDiv.innerText = "🎉 完了: ZIPファイルが正常に保存されました。";
+            statusDiv.style.color = "var(--success)";
+
+            // 保存完了後にDBをクリア
+            await clearDatabase();
+            downloadBtn.disabled = true;
+
+        } catch (error) {
+            console.error(error);
+            statusDiv.innerText = "処理失敗。ただしデータはブラウザ内に保管されています。再度保存を試すか、復元UIを使用してください。";
+            statusDiv.style.color = "var(--danger)";
+            recoveryZone.style.display = "block";
+            downloadBtn.disabled = false;
+        } finally {
+            startBtn.disabled = false;
+        }
+    }
+
+    function getAllChunksFromDB(storeName, mimeType) {
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction([storeName], "readonly");
+            const store = tx.objectStore(storeName);
+            const request = store.getAll();
+            request.onsuccess = () => resolve(new Blob(request.result, { type: mimeType }));
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    // --- 4. 復元・破棄 ---
+    recoveryBtn.addEventListener('click', async () => {
+        recoveryBtn.disabled = true;
+        await processAndDownload();
+        recoveryBtn.disabled = false;
+    });
+
+    clearBackupBtn.addEventListener('click', async () => {
+        if (confirm("本当に前回のバックアップデータを削除しますか？")) {
+            await clearDatabase();
+            downloadBtn.disabled = true;
+            statusDiv.innerText = "バックアップを破棄しました。";
+        }
+    });
 </script>
 </body>
 </html>
