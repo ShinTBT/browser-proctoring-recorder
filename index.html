@@ -1,9 +1,28 @@
-<!DOCTYPE html>
+ご指摘の通り、先ほどのコードはダウンロードが成功すると自動的にブラウザ内のバックアップ（IndexedDB）をすべて消去（await clearDatabase()）し、ダウンロードボタンも無効化（downloadBtn.disabled = true）する「一回きり」の仕様になっていました。
+
+実際の試験運用やテスト時において、「一度ダウンロードしたけれど、ファイルを紛失したからもう一度ダウンロードしたい」「提出前に手元でもう一回保存し直したい」というケースは確実に発生しますよね。
+
+そこで、データ保護の観点から以下のように仕様を変更しました。
+
+🔄 改良した仕様
+自動削除の撤廃:
+ZIPのダウンロードが完了しても、IndexedDBの録画データは自動削除しません。これにより、同じ録画データを何度でも繰り返しダウンロードできます。
+
+手動クリアボタンの設置:
+データがブラウザに残り続けると容量を圧迫するため、画面上に新しく 「ブラウザ内の録画データを消去」 ボタンを設置しました。これを押すか、次回新しく録画を開始するまでは、データが安全に保持されます。
+
+何度も安全に再ダウンロードができる完全な index.html を作成しました。以下のファイルブロックからコードを取得してください。
+
+Python
+# ユーザーの指摘（一度保存すると再ダウンロードできない）を解決するため、
+# 保存成功時にデータベースを自動クリアせず、何度でも再ダウンロード（ZIP再生成）ができるロジックに修正した完全なHTMLファイルを書き出します。
+
+html_content = """<!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>オンラインテスト監視システム (コントロール分離版)</title>
+    <title>オンラインテスト監視システム (再ダウンロード可能版)</title>
     <style>
         :root {
             --primary: #4f46e5;
@@ -86,6 +105,9 @@
         #downloadBtn { background-color: var(--success); color: white; }
         #downloadBtn:hover:not(:disabled) { background-color: var(--success-hover); }
 
+        #clearDataBtn { background-color: #6b7280; color: white; }
+        #clearDataBtn:hover:not(:disabled) { background-color: #4b5563; }
+
         #recoveryZone {
             display: none;
             background-color: #fef3c7;
@@ -158,10 +180,10 @@
 <body>
 
 <div class="container">
-    <h1>オンラインテスト監視システム (プロセスコントロール版)</h1>
+    <h1>オンラインテスト監視システム (再ダウンロード可能版)</h1>
     <p class="description">
         インカメラとディスプレイを同時録画します。録画データは随時ブラウザ内DBへ自動保存されます。<br>
-        試験終了時は、まず「録画停止」を押し、その後に「ZIP保存」ボタンからファイルをダウンロードしてください。
+        録画停止後は、「ZIPファイルを生成して保存」ボタンから<strong>何度でも繰り返しダウンロードが可能</strong>です。
     </p>
 
     <div id="recoveryZone">
@@ -171,9 +193,10 @@
     </div>
     
     <div class="btn-container">
-        <button id="startBtn">🔴 録画開始 (Start)</button>
+        <button id="startBtn">🔴 新しい録画を開始 (Start)</button>
         <button id="stopBtn" disabled>⏹️ 録画停止 (Stop)</button>
         <button id="downloadBtn" disabled>💾 ZIPファイルを生成して保存 (Save ZIP)</button>
+        <button id="clearDataBtn" disabled>🗑️ ブラウザ内の録画データを消去</button>
     </div>
 
     <div id="status">システム初期化中...</div>
@@ -206,6 +229,7 @@
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
     const downloadBtn = document.getElementById('downloadBtn');
+    const clearDataBtn = document.getElementById('clearDataBtn');
     const statusDiv = document.getElementById('status');
     const recoveryZone = document.getElementById('recoveryZone');
     const recoveryBtn = document.getElementById('recoveryBtn');
@@ -239,6 +263,7 @@
             if (countRequest.result > 0) {
                 recoveryZone.style.display = "block";
                 downloadBtn.disabled = false;
+                clearDataBtn.disabled = false;
             }
         };
     }
@@ -271,8 +296,23 @@
 
     // --- 2. 録画コントロール ---
     startBtn.addEventListener('click', async () => {
+        // 新しい録画を始める前に、データが残っている場合は確認を挟む
+        const tx = db.transaction(["camera_chunks"], "readonly");
+        const countReq = tx.objectStore("camera_chunks").count();
+        countReq.onsuccess = async () => {
+            if (countReq.result > 0) {
+                if (!confirm("ブラウザ内に前回の録画データが残っています。新しく録画を開始すると前回のデータは消去されますが、よろしいですか？")) {
+                    return;
+                }
+            }
+            await startRecordingProcess();
+        };
+    });
+
+    async function startRecordingProcess() {
         await clearDatabase(); 
         downloadBtn.disabled = true;
+        clearDataBtn.disabled = true;
         statusDiv.innerText = "デバイスと画面の許可を要求中...";
 
         try {
@@ -304,7 +344,7 @@
             console.error(err);
             statusDiv.innerText = "エラー: 権限が得られませんでした。";
         }
-    });
+    }
 
     stopBtn.addEventListener('click', stopRecording);
 
@@ -324,18 +364,24 @@
         if (stoppedCount < 2) return; 
         stoppedCount = 0; 
 
-        statusDiv.innerText = "⏹️ 録画停止完了。右側の『ZIPファイルを生成して保存』ボタンを押してください。";
+        statusDiv.innerText = "⏹️ 録画停止完了。右側の『ZIPファイルを生成して保存』ボタンを押してください（何度でも保存可能です）。";
         statusDiv.style.color = "var(--primary)";
         startBtn.disabled = false;
         stopBtn.disabled = true;
         downloadBtn.disabled = false;
+        clearDataBtn.disabled = false; // 手動データ消去ボタンも有効化
     }
 
-    // --- 3. ダウンロード処理 ---
+    // --- 3. ダウンロード処理 (自動クリアを廃止し、何度でもクリック可能に) ---
     downloadBtn.addEventListener('click', async () => {
         downloadBtn.disabled = true;
         startBtn.disabled = true;
+        clearDataBtn.disabled = true;
         await processAndDownload();
+        // 処理終了後にボタンを再度「有効化」して再ダウンロード可能にする
+        downloadBtn.disabled = false;
+        startBtn.disabled = false;
+        clearDataBtn.disabled = false;
     });
 
     async function processAndDownload() {
@@ -354,7 +400,7 @@
             const screenHash = await calculateSHA256(screenBlob);
 
             const metadata = {
-                version: "1.0.0-separated",
+                version: "1.0.0-multi-download",
                 generated_at: new Date().toISOString(),
                 files: {
                     "camera_video.webm": { sha256: cameraHash, size_bytes: cameraBlob.size },
@@ -378,21 +424,14 @@
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
 
-            statusDiv.innerText = "🎉 完了: ZIPファイルが正常に保存されました。";
+            statusDiv.innerText = "🎉 完了: ZIPファイルが正常に保存されました。（必要に応じて再度ダウンロードも可能です）";
             statusDiv.style.color = "var(--success)";
-
-            // 保存完了後にDBをクリア
-            await clearDatabase();
-            downloadBtn.disabled = true;
 
         } catch (error) {
             console.error(error);
             statusDiv.innerText = "処理失敗。ただしデータはブラウザ内に保管されています。再度保存を試すか、復元UIを使用してください。";
             statusDiv.style.color = "var(--danger)";
             recoveryZone.style.display = "block";
-            downloadBtn.disabled = false;
-        } finally {
-            startBtn.disabled = false;
         }
     }
 
@@ -406,7 +445,18 @@
         });
     }
 
-    // --- 4. 復元・破棄 ---
+    // --- 4. 明示的なデータ削除コントロール ---
+    clearDataBtn.addEventListener('click', async () => {
+        if (confirm("ブラウザ内に保存されている現在の録画データを完全に消去します。よろしいですか？（消去後はダウンロードできなくなります）")) {
+            await clearDatabase();
+            downloadBtn.disabled = true;
+            clearDataBtn.disabled = true;
+            statusDiv.innerText = "ブラウザ内のデータを消去しました。";
+            statusDiv.style.color = "var(--text-main)";
+        }
+    });
+
+    // 復元UI側の動作
     recoveryBtn.addEventListener('click', async () => {
         recoveryBtn.disabled = true;
         await processAndDownload();
@@ -414,9 +464,10 @@
     });
 
     clearBackupBtn.addEventListener('click', async () => {
-        if (confirm("本当に前回のバックアップデータを削除しますか？")) {
+        if (confirm("本当にバックアップデータを削除しますか？")) {
             await clearDatabase();
             downloadBtn.disabled = true;
+            clearDataBtn.disabled = true;
             statusDiv.innerText = "バックアップを破棄しました。";
         }
     });
