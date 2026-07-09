@@ -1,9 +1,19 @@
-<!DOCTYPE html>
+インカメラが物理的に故障していたり、認識されなかったりする場合でも、ディスプレイ（画面録画）だけで試験を継続し、安全にZIP保存まで行えるようにロジックを修正しました。
+
+カメラが使えない場合は自動的にスキップし、画面録画のみのモードに切り替わります。また、生成されるZIP内の metadata.json にも、カメラが故障・不在であったことが明記されるよう安全に配慮しています。
+
+完全に動作する index.html ファイルを新しく生成しました。以下のファイルブロックからコードを取得（ダウンロード）してください。
+
+Python
+# インカメラの故障時（デバイス不在、エラー発生時）でも、画面録画のみで動作を継続できるように
+# フォールバック処理を追加した完全なHTMLファイルを書き出します。
+
+html_content = """<!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>オンラインテスト監視システム (再ダウンロード可能版)</title>
+    <title>オンラインテスト監視システム (カメラ故障対応版)</title>
     <style>
         :root {
             --primary: #4f46e5;
@@ -161,10 +171,10 @@
 <body>
 
 <div class="container">
-    <h1>オンラインテスト監視システム (再ダウンロード可能版)</h1>
+    <h1>オンラインテスト監視システム (カメラ故障対応版)</h1>
     <p class="description">
         インカメラとディスプレイを同時録画します。録画データは随時ブラウザ内DBへ自動保存されます。<br>
-        録画停止後は、「ZIPファイルを生成して保存」ボタンから<strong>何度でも繰り返しダウンロードが可能</strong>です。
+        <strong>※インカメラが故障・不在の場合、自動的に画面録画のみで試験を開始します。</strong>
     </p>
 
     <div id="recoveryZone">
@@ -199,10 +209,11 @@
 </div>
 
 <script>
-    let cameraStream, screenStream;
-    let cameraRecorder, screenRecorder;
+    let cameraStream = null, screenStream = null;
+    let cameraRecorder = null, screenRecorder = null;
+    let isCameraActive = false; // カメラが正常に動作しているかどうかのフラグ
+    let requiredRecordersCount = 0; // 停止を待つべきレコーダーの総数
     
-    // DB関連変数
     let db;
     const DB_NAME = "ProctoringBackupDB";
     const DB_VERSION = 1;
@@ -216,7 +227,7 @@
     const recoveryBtn = document.getElementById('recoveryBtn');
     const clearBackupBtn = document.getElementById('clearBackupBtn');
 
-    // --- 1. IndexedDBの初期化 ---
+    // --- IndexedDBの初期化 ---
     const dbRequest = indexedDB.open(DB_NAME, DB_VERSION);
     dbRequest.onupgradeneeded = (e) => {
         let database = e.target.result;
@@ -237,8 +248,8 @@
     };
 
     function checkExistingBackup() {
-        const tx = db.transaction(["camera_chunks"], "readonly");
-        const store = tx.objectStore("camera_chunks");
+        const tx = db.transaction(["screen_chunks"], "readonly");
+        const store = tx.objectStore("screen_chunks");
         const countRequest = store.count();
         countRequest.onsuccess = () => {
             if (countRequest.result > 0) {
@@ -275,11 +286,10 @@
         return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     }
 
-    // --- 2. 録画コントロール ---
+    // --- 録画コントロール ---
     startBtn.addEventListener('click', async () => {
-        // 新しい録画を始める前に、データが残っている場合は確認を挟む
-        const tx = db.transaction(["camera_chunks"], "readonly");
-        const countReq = tx.objectStore("camera_chunks").count();
+        const tx = db.transaction(["screen_chunks"], "readonly");
+        const countReq = tx.objectStore("screen_chunks").count();
         countReq.onsuccess = async () => {
             if (countReq.result > 0) {
                 if (!confirm("ブラウザ内に前回の録画データが残っています。新しく録画を開始すると前回のデータは消去されますが、よろしいですか？")) {
@@ -294,37 +304,57 @@
         await clearDatabase(); 
         downloadBtn.disabled = true;
         clearDataBtn.disabled = true;
+        isCameraActive = false;
+        requiredRecordersCount = 0;
         statusDiv.innerText = "デバイスと画面の許可を要求中...";
 
+        // 1. まずインカメラの取得を試みる
         try {
             cameraStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: true });
             document.getElementById('cameraPreview').srcObject = cameraStream;
+            isCameraActive = true;
+            requiredRecordersCount++;
+        } catch (err) {
+            console.warn("インカメラの起動に失敗しました（故障または非許可）。画面録画のみで続行します:", err);
+            statusDiv.innerText = "⚠️ カメラが検出されません。画面録画のみでセットアップします...";
+            document.getElementById('cameraPreview').srcObject = null;
+        }
 
+        // 2. ディスプレイ共有の取得
+        try {
             screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface: "monitor" } });
             document.getElementById('screenPreview').srcObject = screenStream;
-
+            requiredRecordersCount++;
+            
             screenStream.getVideoTracks()[0].onended = () => { if (!stopBtn.disabled) stopRecording(); };
-
-            cameraRecorder = new MediaRecorder(cameraStream, { mimeType: 'video/webm;codecs=vp8,opus' });
-            screenRecorder = new MediaRecorder(screenStream, { mimeType: 'video/webm;codecs=vp8' });
-
-            cameraRecorder.ondataavailable = e => { if (e.data.size > 0) saveChunk("camera_chunks", e.data); };
-            screenRecorder.ondataavailable = e => { if (e.data.size > 0) saveChunk("screen_chunks", e.data); };
-
-            cameraRecorder.onstop = screenRecorder.onstop = handleStop;
-
-            cameraRecorder.start(1000); 
-            screenRecorder.start(1000);
-
-            statusDiv.innerText = "🔴 監視録画中 (自動バックアップ有効)";
-            statusDiv.style.color = "var(--danger)";
-            startBtn.disabled = true;
-            stopBtn.disabled = false;
-
         } catch (err) {
-            console.error(err);
-            statusDiv.innerText = "エラー: 権限が得られませんでした。";
+            console.error("画面共有の許可が得られませんでした:", err);
+            statusDiv.innerText = "エラー: 画面共有が許可されなかったため録画を開始できません。";
+            if (cameraStream) cameraStream.getTracks().forEach(t => t.stop());
+            return;
         }
+
+        // 3. レコーダーのセットアップと開始
+        if (isCameraActive) {
+            cameraRecorder = new MediaRecorder(cameraStream, { mimeType: 'video/webm;codecs=vp8,opus' });
+            cameraRecorder.ondataavailable = e => { if (e.data.size > 0) saveChunk("camera_chunks", e.data); };
+            cameraRecorder.onstop = handleStop;
+            cameraRecorder.start(1000);
+        }
+
+        screenRecorder = new MediaRecorder(screenStream, { mimeType: 'video/webm;codecs=vp8' });
+        screenRecorder.ondataavailable = e => { if (e.data.size > 0) saveChunk("screen_chunks", e.data); };
+        screenRecorder.onstop = handleStop;
+        screenRecorder.start(1000);
+
+        if (isCameraActive) {
+            statusDiv.innerText = "🔴 監視録画中 (カメラ＋画面、自動バックアップ有効)";
+        } else {
+            statusDiv.innerText = "🔴 監視録画中 (⚠️画面録画のみ、自動バックアップ有効)";
+        }
+        statusDiv.style.color = "var(--danger)";
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
     }
 
     stopBtn.addEventListener('click', stopRecording);
@@ -342,24 +372,24 @@
     let stoppedCount = 0;
     async function handleStop() {
         stoppedCount++;
-        if (stoppedCount < 2) return; 
+        // 動作しているレコーダーの数（1つまたは2つ）に達するまで待つ
+        if (stoppedCount < requiredRecordersCount) return; 
         stoppedCount = 0; 
 
-        statusDiv.innerText = "⏹️ 録画停止完了。右側の『ZIPファイルを生成して保存』ボタンを押してください（何度でも保存可能です）。";
+        statusDiv.innerText = "⏹️ 録画停止完了。右側の『ZIPファイルを生成して保存』ボタンを押してください。";
         statusDiv.style.color = "var(--primary)";
         startBtn.disabled = false;
         stopBtn.disabled = true;
         downloadBtn.disabled = false;
-        clearDataBtn.disabled = false; // 手動データ消去ボタンも有効化
+        clearDataBtn.disabled = false;
     }
 
-    // --- 3. ダウンロード処理 (自動クリアを廃止し、何度でもクリック可能に) ---
+    // --- ダウンロード処理 ---
     downloadBtn.addEventListener('click', async () => {
         downloadBtn.disabled = true;
         startBtn.disabled = true;
         clearDataBtn.disabled = true;
         await processAndDownload();
-        // 処理終了後にボタンを再度「有効化」して再ダウンロード可能にする
         downloadBtn.disabled = false;
         startBtn.disabled = false;
         clearDataBtn.disabled = false;
@@ -373,26 +403,31 @@
             const cameraBlob = await getAllChunksFromDB("camera_chunks", "video/webm");
             const screenBlob = await getAllChunksFromDB("screen_chunks", "video/webm");
 
-            if (cameraBlob.size === 0 || screenBlob.size === 0) {
-                throw new Error("データが見つからないか、空です。");
+            if (screenBlob.size === 0) {
+                throw new Error("画面録画データが見つからないか、空です。");
             }
 
-            const cameraHash = await calculateSHA256(cameraBlob);
-            const screenHash = await calculateSHA256(screenBlob);
-
+            const zip = new JSZip();
             const metadata = {
-                version: "1.0.0-multi-download",
+                version: "1.1.0-camera-fault-tolerant",
                 generated_at: new Date().toISOString(),
-                files: {
-                    "camera_video.webm": { sha256: cameraHash, size_bytes: cameraBlob.size },
-                    "screen_video.webm": { sha256: screenHash, size_bytes: screenBlob.size }
-                }
+                camera_status: cameraBlob.size > 0 ? "active" : "failed_or_missing",
+                files: {}
             };
 
-            const zip = new JSZip();
-            zip.file("metadata.json", JSON.stringify(metadata, null, 2));
-            zip.file("camera_video.webm", cameraBlob);
+            // カメラデータが存在する場合のみZIPとメタデータに含める
+            if (cameraBlob.size > 0) {
+                const cameraHash = await calculateSHA256(cameraBlob);
+                metadata.files["camera_video.webm"] = { sha256: cameraHash, size_bytes: cameraBlob.size };
+                zip.file("camera_video.webm", cameraBlob);
+            }
+
+            // 画面データは必須
+            const screenHash = await calculateSHA256(screenBlob);
+            metadata.files["screen_video.webm"] = { sha256: screenHash, size_bytes: screenBlob.size };
             zip.file("screen_video.webm", screenBlob);
+
+            zip.file("metadata.json", JSON.stringify(metadata, null, 2));
 
             const zipBlob = await zip.generateAsync({ type: "blob" });
             
@@ -405,12 +440,16 @@
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
 
-            statusDiv.innerText = "🎉 完了: ZIPファイルが正常に保存されました。（必要に応じて再度ダウンロードも可能です）";
+            if (cameraBlob.size > 0) {
+                statusDiv.innerText = "🎉 完了: ZIPファイルが正常に保存されました。";
+            } else {
+                statusDiv.innerText = "⚠️ 完了: カメラ不在のため画面録画のみのZIPファイルが保存されました。";
+            }
             statusDiv.style.color = "var(--success)";
 
         } catch (error) {
             console.error(error);
-            statusDiv.innerText = "処理失敗。ただしデータはブラウザ内に保管されています。再度保存を試すか、復元UIを使用してください。";
+            statusDiv.innerText = "処理失敗。ただしデータはブラウザ内に保管されています。再度保存を試してください。";
             statusDiv.style.color = "var(--danger)";
             recoveryZone.style.display = "block";
         }
@@ -426,9 +465,9 @@
         });
     }
 
-    // --- 4. 明示的なデータ削除コントロール ---
+    // --- データ削除コントロール ---
     clearDataBtn.addEventListener('click', async () => {
-        if (confirm("ブラウザ内に保存されている現在の録画データを完全に消去します。よろしいですか？（消去後はダウンロードできなくなります）")) {
+        if (confirm("ブラウザ内に保存されている現在の録画データを完全に消去します。よろしいですか？")) {
             await clearDatabase();
             downloadBtn.disabled = true;
             clearDataBtn.disabled = true;
@@ -437,7 +476,6 @@
         }
     });
 
-    // 復元UI側の動作
     recoveryBtn.addEventListener('click', async () => {
         recoveryBtn.disabled = true;
         await processAndDownload();
